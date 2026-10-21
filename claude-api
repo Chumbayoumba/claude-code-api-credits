@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# claude-api — нативный Claude Code (TUI) на API-ключе Console с промо-кредитами.
+#
+# Промо-кредиты «API credit (Max 20x)» покрывают только Agent SDK
+# (cc_entrypoint=sdk-cli), а интерактивный `claude` по умолчанию ходит с
+# entrypoint=cli и падает с 400 "credit balance too low". Решение — форсировать
+# CLAUDE_CODE_ENTRYPOINT=sdk-cli для TUI.
+#
+#   claude-api                   интерактивный TUI
+#   claude-api -p "..."          одноразовый print-режим
+#   claude-api --continue        продолжить последнюю сессию
+#   claude-api --resume <id>     продолжить сессию по id
+#   ... любые флаги claude передаются как есть
+#
+# Ключ берётся из $ANTHROPIC_API_KEY, либо из файла $CLAUDE_API_KEY_FILE
+# (по умолчанию $HOME/.anthropic_api_key).
+set -u
+
+# claude из PATH, иначе ~/.local/bin/claude
+claude_bin="$(command -v claude || true)"
+: "${claude_bin:=$HOME/.local/bin/claude}"
+
+key_file="${CLAUDE_API_KEY_FILE:-$HOME/.anthropic_api_key}"
+key_from_env="${ANTHROPIC_API_KEY:-}"
+
+# Чистим унаследованные переменные, чтобы подписка / сторонние провайдеры
+# (proxy, роутинг модели) не протекали и не ломали биллинг.
+for v in $(compgen -e); do
+  case "$v" in
+    ANTHROPIC_*|CLAUDECODE|CLAUDE_PID|CLAUDE_EFFORT|CLAUDE_CODE_ENTRYPOINT|CLAUDE_CODE_SESSION_ID|\
+    CLAUDE_CODE_CHILD_SESSION|CLAUDE_CODE_MESSAGING_*|CLAUDE_CODE_SESSION_ATTENDED|CLAUDE_CODE_EXECPATH|\
+    CLAUDE_CODE_OAUTH_TOKEN|CLAUDE_CODE_USE_BEDROCK|CLAUDE_CODE_USE_VERTEX|CLAUDE_CODE_USE_FOUNDRY|\
+    CLAUDE_CODE_SKIP_*_AUTH|CLAUDE_CODE_SIMPLE)
+      unset "$v" ;;
+  esac
+done
+
+if [[ -n "$key_from_env" ]]; then
+  export ANTHROPIC_API_KEY="$key_from_env"
+elif [[ -s "$key_file" ]]; then
+  export ANTHROPIC_API_KEY="$(tr -d '[:space:]' < "$key_file")"
+else
+  printf 'Нет ключа: задайте ANTHROPIC_API_KEY или положите sk-ant-... в %s\n' "$key_file" >&2
+  exit 1
+fi
+
+# Нативный TUI в SDK-режиме: кредиты списываются как Agent SDK, а не подписка.
+export CLAUDE_CODE_ENTRYPOINT="sdk-cli"
+
+# Без запросов разрешений.
+exec "$claude_bin" --dangerously-skip-permissions "$@"
